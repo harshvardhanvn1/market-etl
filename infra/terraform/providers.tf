@@ -1,7 +1,7 @@
 # Terraform version and required providers
 terraform {
   required_version = ">= 1.0"
-  
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -13,7 +13,7 @@ terraform {
 # AWS Provider configuration
 provider "aws" {
   region = var.aws_region
-  
+
   # Auto-tag all resources
   default_tags {
     tags = {
