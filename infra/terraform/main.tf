@@ -179,3 +179,78 @@ resource "aws_iam_role_policy" "glue_cloudwatch_logs" {
     ]
   })
 }
+
+
+#######################################
+# S3 Bucket for Glue Scripts
+#######################################
+
+# Upload the downloader script to S3
+resource "aws_s3_object" "glue_downloader_script" {
+  bucket = aws_s3_bucket.data_lake.id
+  key    = "scripts/glue_binance_downloader.py"
+  source = "../../jobs/downloader/glue_binance_downloader.py"
+  etag   = filemd5("../../jobs/downloader/glue_binance_downloader.py")
+
+  # Encrypt the script
+  server_side_encryption = "AES256"
+
+  tags = {
+    Name        = "Glue Downloader Script"
+    Description = "Python script for downloading Binance data"
+  }
+}
+
+#######################################
+# AWS Glue Job - Binance Downloader
+#######################################
+
+resource "aws_glue_job" "binance_downloader" {
+  name     = "${var.project_name}-${var.environment}-binance-downloader"
+  role_arn = aws_iam_role.glue_job_role.arn
+
+  # Python Shell job type (not Spark)
+  command {
+    name            = "pythonshell"
+    script_location = "s3://${aws_s3_bucket.data_lake.id}/${aws_s3_object.glue_downloader_script.key}"
+    python_version  = "3.9"
+  }
+
+  # Default job parameters (can be overridden when running)
+  default_arguments = {
+    "--job-language"        = "python"
+    "--job-bookmark-option" = "job-bookmark-disable"
+
+    # Job name (required by our script)
+    "--JOB_NAME" = "${var.project_name}-${var.environment}-binance-downloader"
+
+    # Our custom parameters
+    "--BUCKET_NAME"      = aws_s3_bucket.data_lake.id
+    "--SYMBOLS"          = "BTCUSDT,ETHUSDT,BNBUSDT"
+    "--START_YEAR_MONTH" = "2025-07"
+    "--END_YEAR_MONTH"   = "2025-09"
+    "--DATA_TYPE"        = "trades"
+
+    # Enable CloudWatch metrics
+    "--enable-metrics"                   = ""
+    "--enable-continuous-cloudwatch-log" = "true"
+  }
+
+  # Python Shell specific settings
+  max_capacity = 1 # 1 DPU for Python Shell
+
+  # Retry and timeout settings
+  max_retries = 1
+  timeout     = 120 # 2 hours (in minutes)
+
+  # CloudWatch log group
+  glue_version = "3.0"
+
+  tags = {
+    Name        = "Binance Data Downloader"
+    Description = "Downloads historical market data from Binance to S3"
+  }
+
+  # Ensure script is uploaded before creating job
+  depends_on = [aws_s3_object.glue_downloader_script]
+}
