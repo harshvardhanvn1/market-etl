@@ -254,3 +254,63 @@ resource "aws_glue_job" "binance_downloader" {
   # Ensure script is uploaded before creating job
   depends_on = [aws_s3_object.glue_downloader_script]
 }
+
+#######################################
+# S3 Object - Spark ETL Script
+#######################################
+
+resource "aws_s3_object" "glue_etl_script" {
+  bucket = aws_s3_bucket.data_lake.id
+  key    = "scripts/glue_spark_trades_etl.py"
+  source = "../../jobs/etl/glue_spark_trades_etl.py"
+  etag   = filemd5("../../jobs/etl/glue_spark_trades_etl.py")
+
+  server_side_encryption = "AES256"
+
+  tags = {
+    Name = "Glue Spark ETL Script"
+  }
+}
+
+#######################################
+# AWS Glue Job - Spark ETL
+#######################################
+
+resource "aws_glue_job" "spark_trades_etl" {
+  name     = "${var.project_name}-${var.environment}-spark-trades-etl"
+  role_arn = aws_iam_role.glue_job_role.arn
+
+  command {
+    name            = "glueetl"
+    script_location = "s3://${aws_s3_bucket.data_lake.id}/${aws_s3_object.glue_etl_script.key}"
+    python_version  = "3"
+  }
+
+  default_arguments = {
+    "--job-language"                     = "python"
+    "--job-bookmark-option"              = "job-bookmark-disable"
+    "--JOB_NAME"                         = "${var.project_name}-${var.environment}-spark-trades-etl"
+    "--BUCKET_NAME"                      = aws_s3_bucket.data_lake.id
+    "--SYMBOLS"                          = "BTCUSDT,ETHUSDT,BNBUSDT"
+    "--DATA_TYPE"                        = "trades"
+    "--enable-metrics"                   = ""
+    "--enable-continuous-cloudwatch-log" = "true"
+    "--enable-spark-ui"                  = "true"
+  }
+
+  # Spark job settings
+  glue_version = "4.0"
+
+  # 10 DPUs for Spark (2 = driver + 8 = executors)
+  number_of_workers = 10
+  worker_type       = "G.1X"
+
+  max_retries = 1
+  timeout     = 180 # 3 hours
+
+  tags = {
+    Name = "Spark Trades ETL"
+  }
+
+  depends_on = [aws_s3_object.glue_etl_script]
+}
