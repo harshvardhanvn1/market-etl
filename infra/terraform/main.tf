@@ -180,7 +180,6 @@ resource "aws_iam_role_policy" "glue_cloudwatch_logs" {
   })
 }
 
-
 #######################################
 # S3 Bucket for Glue Scripts
 #######################################
@@ -256,6 +255,61 @@ resource "aws_glue_job" "binance_downloader" {
 }
 
 #######################################
+# S3 Object - Unzipper Script
+#######################################
+
+resource "aws_s3_object" "glue_unzipper_script" {
+  bucket = aws_s3_bucket.data_lake.id
+  key    = "scripts/glue_binance_unzipper.py"
+  source = "../../jobs/downloader/glue_binance_unzipper.py"
+  etag   = filemd5("../../jobs/downloader/glue_binance_unzipper.py")
+
+  server_side_encryption = "AES256"
+
+  tags = {
+    Name        = "Glue Unzipper Script"
+    Description = "Streaming unzipper using S3 multipart upload"
+  }
+}
+
+#######################################
+# Glue Job - Unzipper
+#######################################
+
+resource "aws_glue_job" "binance_unzipper" {
+  name     = "${var.project_name}-${var.environment}-binance-unzipper"
+  role_arn = aws_iam_role.glue_job_role.arn
+
+  command {
+    name            = "pythonshell"
+    script_location = "s3://${aws_s3_bucket.data_lake.id}/${aws_s3_object.glue_unzipper_script.key}"
+    python_version  = "3.9"
+  }
+
+  default_arguments = {
+    "--job-language"                     = "python"
+    "--job-bookmark-option"              = "job-bookmark-disable"
+    "--JOB_NAME"                         = "${var.project_name}-${var.environment}-binance-unzipper"
+    "--BUCKET_NAME"                      = aws_s3_bucket.data_lake.id
+    "--DATA_TYPE"                        = "trades"
+    "--enable-metrics"                   = ""
+    "--enable-continuous-cloudwatch-log" = "true"
+  }
+
+  max_capacity = 1
+  max_retries  = 1
+  timeout      = 180 # 3 hours for large files
+  glue_version = "3.0"
+
+  tags = {
+    Name        = "Binance Unzipper"
+    Description = "Streaming unzipper for production-grade file processing"
+  }
+
+  depends_on = [aws_s3_object.glue_unzipper_script]
+}
+
+#######################################
 # S3 Object - Spark ETL Script
 #######################################
 
@@ -291,17 +345,16 @@ resource "aws_glue_job" "spark_trades_etl" {
     "--job-bookmark-option"              = "job-bookmark-disable"
     "--JOB_NAME"                         = "${var.project_name}-${var.environment}-spark-trades-etl"
     "--BUCKET_NAME"                      = aws_s3_bucket.data_lake.id
-    "--SYMBOLS"                          = "BTCUSDT,ETHUSDT,BNBUSDT"
-    "--DATA_TYPE"                        = "trades"
     "--enable-metrics"                   = ""
     "--enable-continuous-cloudwatch-log" = "true"
     "--enable-spark-ui"                  = "true"
+    "--spark-event-logs-path"            = "s3://${aws_s3_bucket.data_lake.id}/logs/spark/"
   }
 
   # Spark job settings
   glue_version = "4.0"
 
-  # 10 DPUs for Spark (2 = driver + 8 = executors)
+  # 10 workers (enough for 9 files + shuffling)
   number_of_workers = 10
   worker_type       = "G.1X"
 
