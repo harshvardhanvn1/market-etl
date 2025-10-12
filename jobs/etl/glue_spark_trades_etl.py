@@ -7,7 +7,7 @@ import logging
 
 from pyspark.context import SparkContext
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, to_timestamp, when, regexp_extract, input_file_name
+from pyspark.sql.functions import col, to_timestamp, when, regexp_extract, input_file_name, dayofmonth
 from pyspark.sql.types import StructType, StructField, LongType, DoubleType, StringType, DateType, IntegerType
 from awsglue.context import GlueContext
 from awsglue.utils import getResolvedOptions
@@ -84,11 +84,8 @@ def main():
     # Convert timestamp from milliseconds to timestamp
     df = df.withColumn("trade_time", to_timestamp(col("time") / 1000))
     
-    # Extract day for partitioning
-    df = df.withColumn(
-        "day",
-        col("trade_time").cast(DateType()).cast(StringType()).substr(9, 2).cast(IntegerType())
-    )
+    # Extract day for partitioning using proper Spark function
+    df = df.withColumn("day", dayofmonth(col("trade_time")))
     
     # Convert string booleans to actual booleans
     df = df.withColumn(
@@ -124,17 +121,59 @@ def main():
     initial_count = df_final.count()
     logger.info(f"Initial row count: {initial_count:,}")
     
+    # Filter for valid data
     df_clean = df_final.filter(
+        # Timestamp must not be NULL
         col("trade_time").isNotNull() &
+        
+        # Price and quantity must exist and be positive
         col("price").isNotNull() &
         col("quantity").isNotNull() &
         (col("price") > 0) &
-        (col("quantity") > 0)
+        (col("quantity") > 0) &
+        
+        # CRITICAL: Validate the extracted date components are possible
+        # Reject impossible dates like Sept 31, Feb 30, Feb 29 in non-leap years, etc.
+        (
+            # Valid day ranges by month
+            (
+                # Months with 31 days: Jan, Mar, May, Jul, Aug, Oct, Dec
+                ((col("month").isin(1, 3, 5, 7, 8, 10, 12)) & (col("day") <= 31)) |
+                
+                # Months with 30 days: Apr, Jun, Sep, Nov
+                ((col("month").isin(4, 6, 9, 11)) & (col("day") <= 30)) |
+                
+                # February: Requires leap year logic
+                (
+                    (col("month") == 2) &
+                    (
+                        # Leap years: Feb 1-29 allowed
+                        (
+                            (
+                                ((col("year") % 4 == 0) & (col("year") % 100 != 0)) |
+                                (col("year") % 400 == 0)
+                            ) &
+                            (col("day") <= 29)
+                        ) |
+                        # Non-leap years: Feb 1-28 allowed
+                        (
+                            (
+                                (col("year") % 4 != 0) |
+                                ((col("year") % 100 == 0) & (col("year") % 400 != 0))
+                            ) &
+                            (col("day") <= 28)
+                        )
+                    )
+                )
+            ) &
+            # Day must be at least 1
+            (col("day") >= 1)
+        )
     )
     
     final_count = df_clean.count()
     removed = initial_count - final_count
-    logger.info(f"Removed {removed:,} rows in DQ checks")
+    logger.info(f"Removed {removed:,} rows in DQ checks ({removed/initial_count*100:.2f}%)")
     logger.info(f"Final row count: {final_count:,}")
     
     # Show sample data
