@@ -367,3 +367,114 @@ resource "aws_glue_job" "spark_trades_etl" {
 
   depends_on = [aws_s3_object.glue_etl_script]
 }
+
+
+#######################################
+# Glue Catalog Table - Binance Trades
+#######################################
+
+resource "aws_glue_catalog_table" "trades_binance" {
+  name          = "trades_binance"
+  database_name = aws_glue_catalog_database.market_data.name
+
+  description = "Binance spot market trades - tick-level execution data"
+
+  table_type = "EXTERNAL_TABLE"
+
+  parameters = {
+    "EXTERNAL"            = "TRUE"
+    "parquet.compression" = "SNAPPY"
+    "classification"      = "parquet"
+  }
+
+  storage_descriptor {
+    location      = "s3://${aws_s3_bucket.data_lake.id}/processed/binance/spot/trades/"
+    input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
+
+    ser_de_info {
+      name                  = "ParquetHiveSerDe"
+      serialization_library = "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
+
+      parameters = {
+        "serialization.format" = "1"
+      }
+    }
+
+    # Define data columns (non-partition columns)
+    columns {
+      name    = "trade_id"
+      type    = "bigint"
+      comment = "Unique trade identifier from Binance"
+    }
+
+    columns {
+      name    = "trade_time"
+      type    = "timestamp"
+      comment = "Trade execution timestamp (UTC)"
+    }
+
+    columns {
+      name    = "price"
+      type    = "double"
+      comment = "Trade price in quote currency (USDT)"
+    }
+
+    columns {
+      name    = "quantity"
+      type    = "double"
+      comment = "Trade quantity in base currency (BTC/ETH/BNB)"
+    }
+
+    columns {
+      name    = "quote_qty"
+      type    = "double"
+      comment = "Total trade value (price × quantity)"
+    }
+
+    columns {
+      name    = "is_buyer_maker"
+      type    = "boolean"
+      comment = "True if buyer placed limit order (maker)"
+    }
+
+    columns {
+      name    = "is_best_match"
+      type    = "boolean"
+      comment = "True if trade matched best bid/ask"
+    }
+
+    columns {
+      name    = "load_dt"
+      type    = "date"
+      comment = "Date when data was loaded into the pipeline"
+    }
+  }
+
+  # Define partition keys
+  partition_keys {
+    name    = "year"
+    type    = "int"
+    comment = "Year of trade (for partition pruning)"
+  }
+
+  partition_keys {
+    name    = "month"
+    type    = "int"
+    comment = "Month of trade (1-12)"
+  }
+
+  partition_keys {
+    name    = "day"
+    type    = "int"
+    comment = "Day of trade (1-31)"
+  }
+
+  partition_keys {
+    name    = "symbol"
+    type    = "string"
+    comment = "Trading pair symbol (BTCUSDT, ETHUSDT, BNBUSDT)"
+  }
+
+}
+
